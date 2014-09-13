@@ -1070,6 +1070,11 @@ final class HTTPServerResponse : HTTPResponse {
 		catch (Exception e) logDebug("Failed to flush connection after finishing HTTP response: %s", e.msg);
 
 		m_timeFinalized = Clock.currTime(UTC());
+
+		if (!isHeadResponse && bytesWritten < headers.get("Content-Length", "0").to!long) {
+			logDebug("HTTP response only written partially before finalization. Terminating connection.");
+			m_rawConnection.close();
+		}
 	}
 
 	private void writeHeader()
@@ -1441,9 +1446,12 @@ private bool handleRequest(Stream http_stream, TCPConnection tcp_connection, HTT
 		}
 	} catch (HTTPStatusException err) {
 		string dbg_msg;
-		if (settings.options & HTTPServerOption.errorStackTraces) dbg_msg = err.toString().sanitize;
+		if (settings.options & HTTPServerOption.errorStackTraces) {
+			if (err.debugMessage) dbg_msg = err.debugMessage;
+			else dbg_msg = err.toString().sanitize;
+		}
 		if (!res.headerWritten) errorOut(err.status, err.msg, dbg_msg, err);
-		else logDiagnostic("HTTPStatusException while writing the response: %s", err.msg);
+		else logDiagnostic("HTTPSterrorOutatusException while writing the response: %s", err.msg);
 		logDebug("Exception while handling request %s %s: %s", req.method, req.requestURL, err.toString().sanitize);
 		if (!parsed || res.headerWritten || justifiesConnectionClose(err.status))
 			keep_alive = false;

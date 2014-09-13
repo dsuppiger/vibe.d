@@ -14,6 +14,7 @@ import vibe.core.log;
 import vibe.http.router : URLRouter;
 import vibe.http.common : HTTPMethod;
 import vibe.http.server : HTTPServerRequestDelegate;
+import vibe.http.status : isSuccessCode;
 
 import std.algorithm : startsWith, endsWith;
 
@@ -43,7 +44,7 @@ import std.algorithm : startsWith, endsWith;
 	If a method has its first parameter named 'id', it will be mapped to ':id/method' and
     'id' is expected to be part of the URL instead of a JSON request. Parameters with default
     values will be optional in the corresponding JSON request.
-	
+
 	Any interface that you return from a getter will be made available with the
 	base url and its name appended.
 
@@ -63,9 +64,9 @@ import std.algorithm : startsWith, endsWith;
 void registerRestInterface(TImpl)(URLRouter router, TImpl instance, string url_prefix,
                               MethodStyle style = MethodStyle.lowerUnderscored)
 {
-	import vibe.internal.meta.traits : baseInterface;	
+	import vibe.internal.meta.traits : baseInterface;
 	import std.traits : MemberFunctionsTuple, ParameterIdentifierTuple,
-		ParameterTypeTuple, ReturnType;	
+		ParameterTypeTuple, ReturnType;
 
 	void addRoute(HTTPMethod httpVerb, string url, HTTPServerRequestDelegate handler, string[] params)
 	{
@@ -93,7 +94,7 @@ void registerRestInterface(TImpl)(URLRouter router, TImpl instance, string url_p
 			}
 			else {
 				static if (__traits(identifier, overload) == "index") {
-					pragma(msg, "Processing interface " ~ T.stringof ~ 
+					pragma(msg, "Processing interface " ~ T.stringof ~
 						": please use @path(\"/\") to define '/' path" ~
 						" instead of 'index' method. Special behavior will be removed" ~
 						" in the next release.");
@@ -200,14 +201,14 @@ unittest
 	// vibe.d takes care of all JSON encoding/decoding
 	// and actual API implementation can work directly
 	// with native types
-	
+
 	class API : IMyAPI
 	{
 		private {
 			string m_greeting;
 			string[] m_users;
 		}
-		
+
 		@property string greeting() { return m_greeting; }
 		@property void greeting(string text) { m_greeting = text; }
 
@@ -255,7 +256,7 @@ class RestInterfaceClient(I) : I
 
 	import vibe.inet.url : URL, PathEntry;
 	import vibe.http.client : HTTPClientRequest;
-	
+
 	alias RequestFilter = void delegate(HTTPClientRequest req);
 
 	private {
@@ -263,14 +264,14 @@ class RestInterfaceClient(I) : I
 		MethodStyle m_methodStyle;
 		RequestFilter m_requestFilter;
 	}
-	
+
 	/**
-		Creates a new REST implementation of I 
+		Creates a new REST implementation of I
 	*/
 	this (string base_url, MethodStyle style = MethodStyle.lowerUnderscored)
 	{
 		import vibe.internal.meta.uda : findFirstUDA;
-		
+
 		URL url;
 		enum uda = findFirstUDA!(RootPathAttribute, I);
 		static if (!uda.found) {
@@ -301,7 +302,7 @@ class RestInterfaceClient(I) : I
 
 		mixin (generateRestInterfaceSubInterfaceInstances!I());
 	}
-	
+
 	/**
 		An optional request filter that allows to modify each request before it is made.
 	*/
@@ -315,11 +316,11 @@ class RestInterfaceClient(I) : I
 		m_requestFilter = v;
 		mixin (generateRestInterfaceSubInterfaceRequestFilter!I());
 	}
-	
+
 	//pragma(msg, "subinterfaces:");
 	//pragma(msg, generateRestInterfaceSubInterfaces!(I)());
 	mixin (generateRestInterfaceSubInterfaces!I());
-	
+
 	//pragma(msg, "restinterface:");
 	//pragma(msg, generateRestInterfaceMethods!(I)());
 	mixin (generateRestInterfaceMethods!I());
@@ -327,7 +328,7 @@ class RestInterfaceClient(I) : I
 	protected {
 		import vibe.data.json : Json;
 		import vibe.textfilter.urlencode;
-	
+
 		Json request(string verb, string name, Json params, bool[string] param_is_json) const
 		{
 			import vibe.http.client : HTTPClientRequest, HTTPClientResponse,
@@ -340,7 +341,7 @@ class RestInterfaceClient(I) : I
 			URL url = m_baseURL;
 
 			if (name.length) url ~= Path(name);
-			
+
 			if ((verb == "GET" || verb == "HEAD") && params.length > 0) {
 				auto query = appender!string();
 				bool first = true;
@@ -359,7 +360,7 @@ class RestInterfaceClient(I) : I
 
 				url.queryString = query.data();
 			}
-			
+
 			Json ret;
 
 			auto reqdg = (scope HTTPClientRequest req) {
@@ -373,7 +374,7 @@ class RestInterfaceClient(I) : I
 					req.writeJsonBody(params);
 				}
 			};
-			
+
 			auto resdg = (scope HTTPClientResponse res) {
 				ret = res.readJson();
 
@@ -385,12 +386,12 @@ class RestInterfaceClient(I) : I
 					ret.toString()
 				);
 
-				if (res.statusCode != HTTPStatus.OK)
+				if (!isSuccessCode(cast(HTTPStatus)res.statusCode))
 					throw new RestException(res.statusCode, ret);
 			};
 
 			requestHTTP(url, reqdg, resdg);
-			
+
 			return ret;
 		}
 	}
@@ -408,7 +409,7 @@ unittest
 		@property string greeting();
 		// PUT /greeting
 		@property void greeting(string text);
-		
+
 		// POST /new_user
 		void addNewUser(string name);
 		// GET /users
@@ -438,7 +439,7 @@ unittest
 private HTTPServerRequestDelegate jsonMethodHandler(T, string method, alias Func)(T inst)
 {
 	import std.traits : ParameterTypeTuple, ReturnType,
-		ParameterDefaultValueTuple, ParameterIdentifierTuple;	
+		ParameterDefaultValueTuple, ParameterIdentifierTuple;
 	import std.string : format;
 	import std.algorithm : startsWith;
 	import std.exception : enforce;
@@ -452,11 +453,11 @@ private HTTPServerRequestDelegate jsonMethodHandler(T, string method, alias Func
 	alias RT = ReturnType!Func;
 	alias ParamDefaults = ParameterDefaultValueTuple!Func;
 	enum ParamNames = [ ParameterIdentifierTuple!Func ];
-	
+
 	void handler(HTTPServerRequest req, HTTPServerResponse res)
 	{
 		PT params;
-		
+
 		foreach (i, P; PT) {
 			static assert (
 				ParamNames[i].length,
@@ -488,7 +489,7 @@ private HTTPServerRequestDelegate jsonMethodHandler(T, string method, alias Func
 					alias DefVal = ParamDefaults[i];
 					if (req.method == HTTPMethod.GET) {
 						logDebug("query %s of %s" ,ParamNames[i], req.query);
-						
+
 						static if (is (DefVal == void)) {
 							enforce(
 								ParamNames[i] in req.query,
@@ -535,7 +536,7 @@ private HTTPServerRequestDelegate jsonMethodHandler(T, string method, alias Func
 				}
 			}
 		}
-		
+
 		try {
 			import vibe.internal.meta.funcattr;
 
@@ -549,17 +550,19 @@ private HTTPServerRequestDelegate jsonMethodHandler(T, string method, alias Func
 				res.writeJsonBody(ret);
 			}
 		} catch (HTTPStatusException e) {
-			res.writeJsonBody([ "statusMessage": e.msg ], e.status);
+			if (res.headerWritten) logDebug("Response already started when a HTTPStatusException was thrown. Client will not receive the proper error code (%s)!", e.status);
+			else res.writeJsonBody([ "statusMessage": e.msg ], e.status);
 		} catch (Exception e) {
 			// TODO: better error description!
 			logDebug("REST handler exception: %s", e.toString());
-			res.writeJsonBody(
+			if (res.headerWritten) logDebug("Response already started. Client will not receive an error code!");
+			else res.writeJsonBody(
 				[ "statusMessage": e.msg, "statusDebugMessage": sanitizeUTF8(cast(ubyte[])e.toString()) ],
 				HTTPStatus.internalServerError
 			);
 		}
 	}
-	
+
 	return &handler;
 }
 
@@ -573,7 +576,7 @@ private string generateRestInterfaceSubInterfaces(I)()
 		ReturnType, ParameterTypeTuple, fullyQualifiedName;
 	import std.algorithm : canFind;
 	import std.string : format;
-	
+
 	string ret;
 	string[] tps; // list of already processed interface types
 
@@ -625,13 +628,13 @@ private string generateRestInterfaceSubInterfaceInstances(I)()
 		ReturnType, ParameterTypeTuple;
 	import std.string : format;
 	import std.algorithm : canFind;
-	
+
 	string ret;
 	string[] tps; // list of of already processed interface types
 
 	foreach (method; __traits(allMembers, I)) {
 		foreach (overload; MemberFunctionsTuple!(I, method)) {
-			
+
 			alias FT = FunctionTypeOf!overload;
 			alias PTT = ParameterTypeTuple!FT;
 			alias RT = ReturnType!FT;
@@ -645,9 +648,9 @@ private string generateRestInterfaceSubInterfaceInstances(I)()
 				if (!tps.canFind(RT.stringof)) {
 					tps ~= RT.stringof;
 					string implname = RT.stringof ~ "Impl";
-					
+
 					enum meta = extractHTTPMethodAndName!overload();
-					
+
 					ret ~= format(
 						q{
 							if (%s)
@@ -678,7 +681,7 @@ private string generateRestInterfaceSubInterfaceRequestFilter(I)()
 		ReturnType, ParameterTypeTuple;
 	import std.string : format;
 	import std.algorithm : canFind;
-	
+
 	string ret;
 	string[] tps; // list of already processed interface types
 
@@ -698,7 +701,7 @@ private string generateRestInterfaceSubInterfaceRequestFilter(I)()
 				if (!tps.canFind(RT.stringof)) {
 					tps ~= RT.stringof;
 					string implname = RT.stringof ~ "Impl";
-					
+
 					ret ~= format(
 						q{
 							m_%s.requestFilter = m_requestFilter;
@@ -728,7 +731,7 @@ private string generateRestInterfaceMethods(I)()
 	import vibe.internal.meta.codegen : cloneFunction;
 	import vibe.internal.meta.funcattr : IsAttributedParameter;
 	import vibe.http.server : httpMethodString;
-	
+
 	string ret;
 
 	foreach (method; __traits(allMembers, I)) {
@@ -740,9 +743,9 @@ private string generateRestInterfaceMethods(I)()
 			alias ParamNames = ParameterIdentifierTuple!overload;
 
 			enum meta = extractHTTPMethodAndName!overload();
-			
+
 			// NB: block formatting is coded in dependency order, not in 1-to-1 code flow order
-			
+
 			static if (is(RT == interface)) {
 				ret ~= format(
 					q{
@@ -756,7 +759,7 @@ private string generateRestInterfaceMethods(I)()
 			} else {
 				string param_handling_str;
 				string url_prefix = `""`;
-				
+
 				// Block 2
 				foreach (i, PT; PTT){
 					static assert (
@@ -767,7 +770,7 @@ private string generateRestInterfaceMethods(I)()
 							 method
 						)
 					);
-					
+
 					// legacy :id special case, left for backwards-compatibility reasons
 					static if (i == 0 && ParamNames[0] == "id") {
 						static if (is(PT == Json))
@@ -792,10 +795,10 @@ private string generateRestInterfaceMethods(I)()
 						);
 					}
 				}
-				
+
 				// Block 3
 				string request_str;
-				
+
 				static if (!meta.hadPathUDA) {
 					request_str = format(
 						q{
@@ -831,14 +834,14 @@ private string generateRestInterfaceMethods(I)()
 
 					request_str ~= ";\n";
 				}
-				
+
 				request_str ~= format(
 					q{
 						auto jret__ = request("%s", url__ , jparams__, jparamsj__);
 					},
 					httpMethodString(meta.method)
 				);
-				
+
 				static if (!is(ReturnType!overload == void)) {
 					request_str ~= q{
 						typeof(return) ret__;
@@ -846,7 +849,7 @@ private string generateRestInterfaceMethods(I)()
 						return ret__;
 					};
 				}
-				
+
 				// Block 1
 				ret ~= format(
 					q{
@@ -866,7 +869,7 @@ private string generateRestInterfaceMethods(I)()
 			}
 		}
 	}
-	
+
 	return ret;
 }
 
@@ -908,7 +911,7 @@ private string generateModuleImports(I)()
 	import std.algorithm : map;
 	import std.array : join;
 
-	auto modules = getRequiredImports!I();	
+	auto modules = getRequiredImports!I();
 	return join(map!(a => "static import " ~ a ~ ";")(modules), "\n");
 }
 

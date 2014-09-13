@@ -222,11 +222,11 @@ struct MongoCollection {
 	}
 
 	/**
-	  Counts the results of the specified query expression.
+		Counts the results of the specified query expression.
 
-	  Throws Exception if a DB communication error occured.
-See_Also: $(LINK http://www.mongodb.org/display/DOCS/Advanced+Queries#AdvancedQueries-{{count%28%29}})
-	 */
+		Throws Exception if a DB communication error occured.
+		See_Also: $(LINK http://www.mongodb.org/display/DOCS/Advanced+Queries#AdvancedQueries-{{count%28%29}})
+	*/
 	ulong count(T)(T query)
 	{
 		static struct Empty {}
@@ -245,35 +245,74 @@ See_Also: $(LINK http://www.mongodb.org/display/DOCS/Advanced+Queries#AdvancedQu
 	}
 
 	/**
-	  Calculates aggregate values for the data in a collection.
+		Calculates aggregate values for the data in a collection.
 
-	  Params:
-		pipeline = a sequence of data aggregation processes
+		Params:
+			pipeline = A sequence of data aggregation processes. These can
+				either be given as separate parameters, or as a single array
+				parameter.
 
-	  Returns: an array of documents returned by the pipeline
+		Returns: An array of documents returned by the pipeline
 
-	  Throws: Exception if a DB communication error occured
+		Throws: Exception if a DB communication error occured
 
-	  See_Also: $(LINK http://docs.mongodb.org/manual/reference/method/db.collection.aggregate)
+		See_Also: $(LINK http://docs.mongodb.org/manual/reference/method/db.collection.aggregate)
 	*/
-	Bson aggregate(ARGS...)(ARGS pipeline) {
-		static struct Pipeline {
-			ARGS args;
-		}
+	Bson aggregate(ARGS...)(ARGS pipeline)
+	{
+		import std.traits;
+		
+		static if (ARGS.length == 1 && isArray!(ARGS[0]))
+			alias Pipeline = ARGS[0];
+		else static struct Pipeline { ARGS args; }
+
 		static struct CMD {
 			string aggregate;
-			@asArray Nodes pipeline;
+			@asArray Pipeline pipeline;
 		}
 
 		CMD cmd;
 		cmd.aggregate = m_name;
-		cmd.pipeline.args = pipeline;
+		static if (ARGS.length == 1 && isArray!(ARGS[0]))
+			cmd.pipeline = pipeline[0];
+		else cmd.pipeline.args = pipeline;
 		auto ret = database.runCommand(cmd);
 		enforce(ret.ok.get!double == 1, "Aggregate command failed.");
 		return ret.result;
 	}
 
-	void ensureIndex(int[string] field_orders, IndexFlags flags = IndexFlags.None)
+	/// Example taken from the MongoDB documentation
+	unittest {
+		import vibe.db.mongo.mongo;
+
+		void test() {
+			auto db = connectMongoDB("127.0.0.1").getDatabase("test");
+			auto results = db["coll"].aggregate(
+				["$match": ["status": "A"]],
+				["$group": ["_id": Bson("$cust_id"),
+					"total": Bson(["$sum": Bson("$amount")])]],
+				["$sort": ["total": -1]]);
+		}
+	}
+
+	/// The same example, but using an array of arguments
+	unittest {
+		import vibe.db.mongo.mongo;
+
+		void test() {
+			auto db = connectMongoDB("127.0.0.1").getDatabase("test");
+
+			Bson[] args;
+			args ~= serializeToBson(["$match": ["status": "A"]]);
+			args ~= serializeToBson(["$group": ["_id": Bson("$cust_id"),
+					"total": Bson(["$sum": Bson("$amount")])]]);
+			args ~= serializeToBson(["$sort": ["total": -1]]);
+
+			auto results = db["coll"].aggregate(args);
+		}
+	}
+
+	void ensureIndex(int[string] field_orders, IndexFlags flags = IndexFlags.None, ulong expireAfterSeconds = 0)
 	{
 		// TODO: support 2d indexes
 
@@ -296,13 +335,34 @@ See_Also: $(LINK http://www.mongodb.org/display/DOCS/Advanced+Queries#AdvancedQu
 		if( flags & IndexFlags.DropDuplicates ) doc["dropDups"] = true;
 		if( flags & IndexFlags.Background ) doc["background"] = true;
 		if( flags & IndexFlags.Sparse ) doc["sparse"] = true;
+		if( flags & IndexFlags.ExpireAfterSeconds ) doc["expireAfterSeconds"] = expireAfterSeconds;
 		database["system.indexes"].insert(doc);
 	}
 
 	void dropIndex(string name)
 	{
-		assert(false);
+		static struct CMD {
+			string dropIndexes;
+			string index;
+		}
+
+		CMD cmd;
+		cmd.dropIndexes = m_name;
+		cmd.index = name;
+		auto reply = database.runCommand(cmd);
+		enforce(reply.ok.get!double == 1, "dropIndex command failed.");
 	}
+	
+    void drop() {
+		static struct CMD {
+			string drop;
+		}
+
+		CMD cmd;
+		cmd.drop = m_name;
+		auto reply = database.runCommand(cmd);
+		enforce(reply.ok.get!double == 1, "drop command failed.");
+    }
 }
 
 enum IndexFlags {
@@ -310,5 +370,6 @@ enum IndexFlags {
 	Unique = 1<<0,
 	DropDuplicates = 1<<2,
 	Background = 1<<3,
-	Sparse = 1<<4
+	Sparse = 1<<4,
+	ExpireAfterSeconds = 1<<5
 }

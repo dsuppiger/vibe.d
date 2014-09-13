@@ -833,13 +833,15 @@ Json parseJson(R)(ref R range, int* line = null)
 		case '[':
 			Json[] arr;
 			range.popFront();
-			while(true) {
+			while (true) {
 				skipWhitespace(range, line);
 				enforceJson(!range.empty);
 				if(range.front == ']') break;
 				arr ~= parseJson(range, line);
 				skipWhitespace(range, line);
-				enforceJson(!range.empty && (range.front == ',' || range.front == ']'), "Expected ']' or ','.");
+				enforceJson(!range.empty, "Missing ']' before EOF.");
+				enforceJson(range.front == ',' || range.front == ']',
+					format("Expected ']' or ',' - got '%s'.", range.front));
 				if( range.front == ']' ) break;
 				else range.popFront();
 			}
@@ -849,7 +851,7 @@ Json parseJson(R)(ref R range, int* line = null)
 		case '{':
 			Json[string] obj;
 			range.popFront();
-			while(true) {
+			while (true) {
 				skipWhitespace(range, line);
 				enforceJson(!range.empty);
 				if(range.front == '}') break;
@@ -861,8 +863,10 @@ Json parseJson(R)(ref R range, int* line = null)
 				Json itm = parseJson(range, line);
 				obj[key] = itm;
 				skipWhitespace(range, line);
-				enforceJson(!range.empty && (range.front == ',' || range.front == '}'), "Expected '}' or ',' - got '"~range[0]~"'.");
-				if( range.front == '}' ) break;
+				enforceJson(!range.empty, "Missing '}' before EOF.");
+				enforceJson(range.front == ',' || range.front == '}',
+					format("Expected '}' or ',' - got '%s'.", range.front));
+				if (range.front == '}') break;
 				else range.popFront();
 			}
 			range.popFront();
@@ -908,6 +912,16 @@ unittest {
 	assert(json.toPrettyString() == parseJsonString(json.toPrettyString()).toPrettyString());
 }
 
+unittest {
+	try parseJsonString(`{"a": 1`);
+	catch (Exception e) assert(e.msg.endsWith("Missing '}' before EOF."));
+	try parseJsonString(`{"a": 1 x`);
+	catch (Exception e) assert(e.msg.endsWith("Expected '}' or ',' - got 'x'."));
+	try parseJsonString(`[1`);
+	catch (Exception e) assert(e.msg.endsWith("Missing ']' before EOF."));
+	try parseJsonString(`[1 x`);
+	catch (Exception e) assert(e.msg.endsWith("Expected ']' or ',' - got 'x'."));
+}
 
 /**
 	Serializes the given value to JSON.
@@ -972,6 +986,8 @@ string serializeToJsonString(T)(T value)
 /// private
 Json serializeToJsonOld(T)(T value)
 {
+	import vibe.internal.meta.traits;
+
 	alias Unqual!T TU;
 	static if (is(TU == Json)) return value;
 	else static if (is(TU == typeof(null))) return Json(null);
@@ -1061,6 +1077,8 @@ T deserializeJson(T, R)(R input)
 /// private
 T deserializeJsonOld(T)(Json src)
 {
+	import vibe.internal.meta.traits;
+
 	static if( is(T == struct) || isSomeString!T || isIntegral!T || isFloatingPoint!T )
 		if( src.type == Json.Type.null_ ) return T.init;
 	static if (is(T == Json)) return src;
@@ -1690,48 +1708,60 @@ void writePrettyJsonString(R)(ref R dst, in Json json, int level = 0)
 }
 
 
-/// private
-private void jsonEscape(R)(ref R dst, string s)
+/**
+	Helper function that escapes all Unicode characters in a JSON string.
+*/
+string convertJsonToASCII(string json)
 {
-	size_t pos;
-	for ( pos = 0; pos < s.length; pos++ ){
+	auto ret = appender!string;
+	jsonEscape!true(ret, json);
+	return ret.data;
+}
+
+
+/// private
+private void jsonEscape(bool escape_unicode = false, R)(ref R dst, string s)
+{
+	for (size_t pos = 0; pos < s.length; pos++) {
 		immutable(char) ch = s[pos];
 
-		switch(ch){
+		switch (ch) {
 			default:
-				if (ch < 0x80)
-				{
-					dst.put(ch);
-				}
-				else {
-					import std.utf : decode;
-					char[13] buf;
-					int len;
-					dchar codepoint = decode(s, pos);
-					import std.c.stdio : sprintf;
-					/* codepoint is in BMP */
-					if(codepoint < 0x10000)
-					{
-						sprintf(&buf[0], "\\u%04X", codepoint);
-						len = 6;
+				static if (escape_unicode) {
+					if (ch > 0x20 && ch < 0x80) dst.put(ch);
+					else {
+						import std.utf : decode;
+						char[13] buf;
+						int len;
+						dchar codepoint = decode(s, pos);
+						import std.c.stdio : sprintf;
+						/* codepoint is in BMP */
+						if(codepoint < 0x10000)
+						{
+							sprintf(&buf[0], "\\u%04X", codepoint);
+							len = 6;
+						}
+						/* not in BMP -> construct a UTF-16 surrogate pair */
+						else
+						{
+							int first, last;
+
+							codepoint -= 0x10000;
+							first = 0xD800 | ((codepoint & 0xffc00) >> 10);
+							last = 0xDC00 | (codepoint & 0x003ff);
+
+							sprintf(&buf[0], "\\u%04X\\u%04X", first, last);
+							len = 12;
+						}
+
+						pos -= 1;
+						foreach (i; 0 .. len)
+							dst.put(buf[i]);
+
 					}
-					/* not in BMP -> construct a UTF-16 surrogate pair */
-					else
-					{
-						int first, last;
-
-						codepoint -= 0x10000;
-						first = 0xD800 | ((codepoint & 0xffc00) >> 10);
-						last = 0xDC00 | (codepoint & 0x003ff);
-
-						sprintf(&buf[0], "\\u%04X\\u%04X", first, last);
-						len = 12;
-					}
-
-					pos -= 1;
-					foreach (i; 0 .. len)
-						dst.put(buf[i]);
-
+				} else {
+					if (ch < 0x20) dst.formattedWrite("\\u%04X", ch);
+					else dst.put(ch);
 				}
 				break;
 			case '\\': dst.put("\\\\"); break;
@@ -1740,7 +1770,6 @@ private void jsonEscape(R)(ref R dst, string s)
 			case '\t': dst.put("\\t"); break;
 			case '\"': dst.put("\\\""); break;
 		}
-
 	}
 }
 
